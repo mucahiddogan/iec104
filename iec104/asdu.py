@@ -2,8 +2,117 @@
 import logging
 import binascii
 
+import struct
+
 LOG = logging.getLogger()
 
+def casdu2(asdu):
+    return asdu & 0xFF
+    
+def casdu1(asdu):
+    return (asdu >> 8) & 0xFF
+
+def ioa3(ioa):
+    return ioa & 0xFF
+    
+def ioa2(ioa):
+    return (ioa >> 8) & 0xFF    
+
+def ioa1(ioa):
+    return (ioa >> 16) & 0xFF
+    
+class cASDU():
+    type_id = 30
+    sq = 0
+    sq_count = 1
+    cot = 3
+    orig = 0
+    
+    casdu1 = 0
+    casdu2 = 0
+    
+    #asdu = casdu1 << 7 + casdu2 #10255
+    
+    def bytes(self):
+        return struct.pack('BBBBBB', self.type_id, self.sq_count, self.cot, self.orig, self.casdu1, self.casdu2)
+        
+    def bytes2(self):
+        #return struct.pack('BBBBH', self.type_id, self.sq_count, self.cot, self.orig, self.asdu)
+        return struct.pack('BBBBBB', self.type_id, self.sq_count, self.cot, self.orig, self.casdu1, self.casdu2)
+        
+        
+class cInfoObj(cASDU):
+    
+    ioa1 = 0
+    ioa2 = 0
+    ioa3 = 0
+    
+    #ioa = ioa1 << 16 + ioa2 << 8 + ioa3 #9
+ 
+    def bytes(self):
+        return cASDU.bytes(self) + struct.pack('BBB', self.ioa1, self.ioa2, self.ioa3)
+    
+    def bytes2(self):
+        #return self.getBytes2() + struct.pack('BBB', ioa1(self.ioa), ioa2(self.ioa), ioa3(self.ioa))
+        #return self.getBytes2() + struct.pack('BBB', self.ioa1, self.ioa2, self.ioa3)
+        return cASDU.bytes2(self) + struct.pack('BBB', self.ioa1, self.ioa2, self.ioa3)
+ 
+class cSIQ(cInfoObj):
+
+    iv = False
+    nt = False
+    sb = False
+    bl = False
+    #res 3 bits
+    spi = False
+    
+    def bytes(self):
+        #print '>>> {}'.format(int(self.spi) & 0x1)
+        #print '>>> {}'.format(int(struct.pack('B', (int(self.iv) & 0x1) << 7 | (int(self.nt) & 0x1) << 6 | (int(self.sb) & 0x1) << 5 | (int(self.bl) & 0x1) << 4 | (int(self.spi) & 0x1))))
+        return cInfoObj.bytes(self) + struct.pack('B', int((self.iv & 0x1) << 7 | (self.nt & 0x1) << 6 | (self.sb & 0x1) << 5 | (self.bl & 0x1) << 4 | (self.spi & 0x1)))
+        #return cInfoObj.bytes(self) + struct.pack('B', int((int(self.iv) & 0x1) << 7 | (int(self.nt) & 0x1) << 6 | (int(self.sb) & 0x1) << 5 | (int(self.bl) & 0x1) << 4 | (int(self.spi) & 0x1)))
+    
+    def bytes2(self):
+        #return self.getBytes1() + struct.pack('B', self.spi) + struct.pack('BBBBBBB', 0, 0, 0, 0, 0, 0, 0)
+        return cInfoObj.bytes2(self) + struct.pack('B', self.spi) + struct.pack('BBBBBBB', 0, 0, 0, 0, 0, 0, 0)
+
+class cCP56Time2a():
+    milis = 0
+    iv = False
+    minute = 0
+    su = False
+    hour = 0
+    dow = 0
+    dom = 0
+    month = 0
+    year = 0
+    
+    def bytes(self):
+        return struct.pack('HBBBBB', self.milis, int((self.iv & 0b1) << 7 | (self.minute & 0b11111)), int((self.su & 0b1) << 7 | (self.minute & 0b111111)), int((self.dow & 0b111) << 5 | (self.dom & 0x11111)), int(self.month & 0x1111), int(self.year & 0x1111111))
+               
+class cMSpTb1(cSIQ):
+
+    type_id = 30
+    name = 'M_SP_TB_1'
+    description = 'Single-point information with time tag CP56Time2a'
+    
+    CP56Time2a = cCP56Time2a()
+    
+    def bytes(self):
+        #return cSIQ.bytes(self) + struct.pack('BBBBBBB', 0, 0, 0, 0, 0, 0, 0)
+        return cSIQ.bytes(self) + self.CP56Time2a.bytes()
+
+class cMMeTf1(cInfoObj):
+    type_id = 36
+    name = 'M_ME_TF_1'
+    description = 'Measured value, short floating point number with time tag CP56Time2a'
+    
+    value = 0
+    CP56Time2a = cCP56Time2a()
+    
+    def bytes(self):
+        return cInfoObj.bytes(self) + struct.pack('f', self.value) + self.CP56Time2a.bytes()
+         
 
 class ASDU(object):
     def __init__(self, data):
@@ -12,15 +121,19 @@ class ASDU(object):
         sq = data.read('bool')  # Single or Sequence
         sq_count = data.read('uint:7')
         self.cot = data.read('uint:8')
-
+        data.read('uint:8')
         self.asdu = data.read('uint:16')
-        LOG.debug("Type: {}, COT: {}, ASDU: {}".format(self.type_id, self.cot, self.asdu))
+        #LOG.debug("Type: {}, COT: {}, ASDU: {}".format(self.type_id, self.cot, self.asdu))
+        LOG.debug("Type: {}, COT: {}, CASDU: {}, CASDU1: {}, CASDU2: {}".format(self.type_id, self.cot, self.asdu, casdu1(self.asdu), casdu2(self.asdu)))
 
         self.objs = []
         if not sq:
             for i in xrange(sq_count):
-                obj = InfoObjMeta.types[self.type_id](data)
-                self.objs.append(obj)
+                try:
+                    obj = InfoObjMeta.types[self.type_id](data)
+                    self.objs.append(obj)
+                except:
+                    LOG.debug("Unknown Type: {}".format(i))
 
 
 class QDS(object):
@@ -46,11 +159,17 @@ class InfoObjMeta(type):
 class InfoObj(object):
     __metaclass__ = InfoObjMeta
 
+    
+    
     def __init__(self, data):
-        self.ioa = data.read("int:16")
-        data.read("int:16")
-        print "IOA: ", self.ioa
-
+        self.ioa = data.read("uint:24")
+        #print "IOA: ", self.ioa
+        LOG.debug("IOA: {}, IAO1: {}, IAO2: {}, IOA:3 {}".format(self.ioa, ioa1(self.ioa), ioa2(self.ioa), ioa3(self.ioa)))
+        #data.read("uint:16")
+        #d = data.read("int:16")
+        #while d:
+        #    print d 
+        #    d = data.read("int:16")
 
 class SIQ(InfoObj):
     def __init__(self, data):
@@ -178,8 +297,10 @@ class MMeNc1(InfoObj):
 
 
         #qds = QDS(struct.unpack_from('B', data[7:])[0])
-
-        print "val", val
+        #LOG.debug("Value: {}".format(val))
+        LOG.debug('Obj: M_ME_NC_1, Value: {}'.format(self.val))
+        
+        #print "val", val
 
 
 class MMeTc1(InfoObj):
@@ -230,11 +351,25 @@ class MMeNd1(InfoObj):
     description = 'Measured value, normalized value without quality descriptor'
 
 
-class MSpTb1(InfoObj):
+#class MSpTb1(InfoObj):
+class MSpTb1(SIQ):
+
     type_id = 30
     name = 'M_SP_TB_1'
     description = 'Single-point information with time tag CP56Time2a'
-
+    
+    def __init__(self, data):
+        super(MSpTb1, self).__init__(data)
+        LOG.debug('Obj: M_SP_TB_1, Value: {}'.format(self.spi))
+        #print "spi", self.spi
+    '''
+    def __init__(self, data):
+        super(MSpTb1, self).__init__(data)
+        #print binascii.hexlify(data.bytes)
+        self.val = data.read("bool")
+        #qds = QDS(struct.unpack_from('B', data[7:])[0])
+        print "spi", self.val
+    '''
 
 class MDpTb1(InfoObj):
     type_id = 31
@@ -270,6 +405,14 @@ class MMeTf1(InfoObj):
     type_id = 36
     name = 'M_ME_TF_1'
     description = 'Measured value, short floating point number with time tag CP56Time2a'
+    
+    def __init__(self, data):
+        super(MMeTf1, self).__init__(data)
+        #print binascii.hexlify(data.bytes)
+        self.val = data.read("floatle:32")
+        #qds = QDS(struct.unpack_from('B', data[7:])[0])
+        #print "val", self.val
+        LOG.debug('Obj: M_ME_TF_1, Value: {}'.format(self.val))
 
 
 class MItTb1(InfoObj):
@@ -450,3 +593,4 @@ class FDrTa1(InfoObj):
     type_id = 126
     name = 'F_DR_TA_1'
     description = 'Directory'
+    

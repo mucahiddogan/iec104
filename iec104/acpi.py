@@ -15,10 +15,15 @@ STARTDT_ACT = '\x07\x00\x00\x00'
 def i_frame(ssn, rsn):
     return struct.pack('<1BHH', 0x64, ssn << 1, rsn << 1)
 
-
+def i_frame2(ssn, rsn):
+    return struct.pack('<1HH', ssn << 1, rsn << 1)
+    
 def s_frame(rsn):
     return struct.pack('<3BH', 0x64, 0x01, 0x00, rsn << 1)
+    
 
+def s_frame2(rsn):
+    return struct.pack('<2BH', 0x1, 0x00, rsn << 1)
 
 def parse_i_frame(data):
     ssn, rsn = struct.unpack('<2H', data)
